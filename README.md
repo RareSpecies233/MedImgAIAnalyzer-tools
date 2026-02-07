@@ -9,4 +9,8 @@
 - [cpp写的 npz2png 转换器](image_converter.py) *此项目在非macOS上编译可能有些麻烦...
 - [cpp写的 npz2png 转换器 的 编译工具](buildmacOS.sh)
 - [pytorch环境监测脚本](ifpytorch.py)
+- [npz 推理工具](infer_pth.py)
+- [npz 使用onnx的推理工具](infer_onnx.py)
+- [pth 导出 onnx 工具](export_onnx.py)
+- [上面三者的辅助工具](usam_infer_utils.py)
 

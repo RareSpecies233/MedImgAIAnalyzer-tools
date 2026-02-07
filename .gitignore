@@ -1,0 +1,8 @@
+提示词.txt
+best.pth
+.DS_Store
+*/__pycache__
+/__pycache__
+U-SAM/weight
+*.onnx
+*.onnx.data

@@ -1,0 +1,10 @@
+{
+  "img_size": 224,
+  "sam_num_classes": 3,
+  "pixel_mean": [0.1364736, 0.1364736, 0.1364736],
+  "pixel_std": [0.23238614, 0.23238614, 0.23238614],
+  "image_key": "image",
+  "label_key": "label",
+  "device": "cuda",
+  "onnx_opset": 18
+}
