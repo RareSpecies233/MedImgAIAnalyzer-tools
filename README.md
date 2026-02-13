@@ -1,18 +1,21 @@
 # MedImgAIAnalyzer 的 小工具合集
 (开发环境：在macOS上使用uv管理的python)
 
-- [nzp 阅读器](npzReader.py)
-- [nzp 3D 查看器](npz_to_web.py)
-- [xlsx csv json 转换器](npz_to_web.py)
-- [png series/nii/npz series/dcm series 转换器](image_converter.py)
-- [医疗影像格式转换器（dcm/nii/png/npz）](medical_image_converter.py)
-- [cpp写的 npz2png 转换器](image_converter.py) *此项目在非macOS上编译可能有些麻烦...
-- [cpp写的 npz2png 转换器 的 编译工具](buildmacOS.sh)
-- [pytorch环境监测脚本](ifpytorch.py)
+- [cpp写的 npz转glb「3d模型」工具](cppglb) ，请使用[make-macOS.sh](cppglb/make-macOS.sh)在macOS上编译
+- [cpp写的 dcm/nii/png转npz转dcm/nii工具](cppImgCvt)，请使用[make-macOS.sh](cppImgCvt/make-macOS.sh)在macOS上编译
+- [cpp写的 使用onnx模型推理npz的工具](cpponnx)，请使用[buildonnxcpp.sh](cpponnx/buildonnxcpp.sh)在macOS上编译
+- [U-SAM项目](U-SAM) 有一些脚本会用到其中的部分代码
 - [npz 推理工具](infer_pth.py)
 - [npz 使用onnx的推理工具](infer_onnx.py)
 - [pth 导出 onnx 工具](export_onnx.py)
 - [上面三者的辅助工具](usam_infer_utils.py)
+- [npz 阅读器](npzReader.py)
+- [npz 3D 查看器](npz_to_web.py)
+- [glb 转换为 web 查看器](glb_to_web.py)
+- [医疗影像格式转换器（dcm/nii/png/npz）](medical_image_converter.py)
+- [cpp写的 npz2png 转换器](npz2png.cpp)，请使用[buildmacOS.sh](buildmacOS.sh)在macOS上编译
+- [cpp编译工具](buildmacOS.sh)
+- [pytorch环境监测脚本](ifpytorch.py)
 
 ## medical_image_converter.py 用法
 
