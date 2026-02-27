@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 from pathlib import Path
+from typing import Literal
 
 import onnx
 import torch
@@ -78,21 +79,36 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--config", default=None, help="Path to inference_params.json")
     parser.add_argument(
         "--prompt-mode",
-        type=int,
-        choices=[0, 3],
-        default=0,
-        help="0: 无提示导出（默认）；3: 导出支持 boxes + points 的 mode3 推理模型",
+        type=str,
+        choices=["auto", "0", "3"],
+        default="auto",
+        help="auto: 从pth自动检测；0: 无提示导出；3: 导出支持提示输入的mode3推理模型",
     )
     return parser.parse_args()
 
 
+def detect_prompt_mode_from_checkpoint(pth_path: Path) -> Literal[0, 3]:
+    ckpt = torch.load(pth_path, map_location="cpu", weights_only=False)
+    args = ckpt.get("args") if isinstance(ckpt, dict) else None
+    prompt_mode = getattr(args, "prompt_mode", None)
+    if prompt_mode == 3:
+        return 3
+    return 0
+
+
 def main() -> None:
     args = parse_args()
+    pth_path = Path(args.pth)
     config_path = resolve_config_path(None, args.config)
     config = load_config(config_path)
     device = get_device(config)
 
-    base_model = build_usam_from_checkpoint(Path(args.pth), config, device)
+    if args.prompt_mode == "auto":
+        effective_prompt_mode = detect_prompt_mode_from_checkpoint(pth_path)
+    else:
+        effective_prompt_mode = int(args.prompt_mode)
+
+    base_model = build_usam_from_checkpoint(pth_path, config, device)
     base_model.eval()
 
     img_size = int(config["img_size"])
@@ -101,7 +117,7 @@ def main() -> None:
     onnx_path = Path(args.onnx)
     onnx_path.parent.mkdir(parents=True, exist_ok=True)
 
-    if args.prompt_mode == 0:
+    if effective_prompt_mode == 0:
         torch.onnx.export(
             base_model,
             dummy,
@@ -131,6 +147,7 @@ def main() -> None:
     fix_external_data_filename(onnx_path)
 
     print(f"Exported: {onnx_path}")
+    print(f"Prompt mode: {effective_prompt_mode}")
 
 
 if __name__ == "__main__":
