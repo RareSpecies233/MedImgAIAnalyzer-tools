@@ -17,6 +17,8 @@
 - [cpp 写的 npz2png 转换器](npz2png.cpp)，请使用 [buildmacOS.sh](buildmacOS.sh) 在 macOS 上编译
 - [通用 cpp 编译脚本](buildmacOS.sh)
 - [PyTorch 环境检测脚本](ifpytorch.py)
+- [支持prompt mode 3的onnx/pth推理脚本](New_infer_mode3.py)
+
 
 ## medical_image_converter.py 用法
 
