@@ -5,9 +5,23 @@ import argparse
 import base64
 import json
 from pathlib import Path
+import subprocess
+import ssl
+from urllib.error import URLError
+from urllib.request import urlopen
 
 
-HTML_TEMPLATE = """<!doctype html>
+THREE_VERSION = '0.160.0'
+OFFLINE_THREE_DIRNAME = 'threejs'
+OFFLINE_THREE_SOURCES = {
+  'build/three.module.js': f'https://unpkg.com/three@{THREE_VERSION}/build/three.module.js',
+  'examples/jsm/controls/OrbitControls.js': f'https://unpkg.com/three@{THREE_VERSION}/examples/jsm/controls/OrbitControls.js',
+  'examples/jsm/loaders/GLTFLoader.js': f'https://unpkg.com/three@{THREE_VERSION}/examples/jsm/loaders/GLTFLoader.js',
+  'examples/jsm/utils/BufferGeometryUtils.js': f'https://unpkg.com/three@{THREE_VERSION}/examples/jsm/utils/BufferGeometryUtils.js',
+}
+
+
+HTML_TEMPLATE = r"""<!doctype html>
 <html lang="zh-CN">
 <head>
   <meta charset="UTF-8" />
@@ -221,42 +235,32 @@ HTML_TEMPLATE = """<!doctype html>
         threeModules?.gltfLoader &&
         threeModules?.bufferGeometryUtils,
       );
-
-      if (hasEmbedded) {{
-        try {{
-          const threeSource = decodeBase64Text(threeModules.three);
-          const orbitSourceRaw = decodeBase64Text(threeModules.orbitControls);
-          const gltfSourceRaw = decodeBase64Text(threeModules.gltfLoader);
-          const bufferUtilsRaw = decodeBase64Text(threeModules.bufferGeometryUtils);
-
-          const threeUrl = toBlobUrl(threeSource);
-          const bufferUtilsUrl = toBlobUrl(rewriteThreeImport(bufferUtilsRaw, threeUrl));
-          const orbitUrl = toBlobUrl(rewriteThreeImport(orbitSourceRaw, threeUrl));
-          const gltfSource = rewriteThreeImport(gltfSourceRaw, threeUrl)
-            .replace(/from\\s+['\"]\\.\\.\\/utils\\/BufferGeometryUtils\\.js['\"]\\s*;/g, `from '${{bufferUtilsUrl}}';`);
-          const gltfUrl = toBlobUrl(gltfSource);
-
-          const [THREE, orbitModule, gltfModule] = await Promise.all([
-            import(threeUrl),
-            import(orbitUrl),
-            import(gltfUrl),
-          ]);
-          return {{ THREE, OrbitControls: orbitModule.OrbitControls, GLTFLoader: gltfModule.GLTFLoader, revokeUrls }};
-        }} catch (error) {{
-          console.error('内嵌 three 依赖加载失败，改用 CDN 兜底', error);
-          revokeUrls();
-        }}
+      if (!hasEmbedded) {{
+        throw new Error('缺少离线 three.js 依赖。请先在本地生成并下载 threejs 目录后重试。');
       }}
 
       try {{
+        const threeSource = decodeBase64Text(threeModules.three);
+        const orbitSourceRaw = decodeBase64Text(threeModules.orbitControls);
+        const gltfSourceRaw = decodeBase64Text(threeModules.gltfLoader);
+        const bufferUtilsRaw = decodeBase64Text(threeModules.bufferGeometryUtils);
+
+        const threeUrl = toBlobUrl(threeSource);
+        const bufferUtilsUrl = toBlobUrl(rewriteThreeImport(bufferUtilsRaw, threeUrl));
+        const orbitUrl = toBlobUrl(rewriteThreeImport(orbitSourceRaw, threeUrl));
+        const gltfSource = rewriteThreeImport(gltfSourceRaw, threeUrl)
+          .replace(/from\s+['"]\.\.\/utils\/BufferGeometryUtils\.js['"]\s*;/g, `from '${{bufferUtilsUrl}}';`);
+        const gltfUrl = toBlobUrl(gltfSource);
+
         const [THREE, orbitModule, gltfModule] = await Promise.all([
-          import('https://unpkg.com/three@0.160.0/build/three.module.js'),
-          import('https://unpkg.com/three@0.160.0/examples/jsm/controls/OrbitControls.js'),
-          import('https://unpkg.com/three@0.160.0/examples/jsm/loaders/GLTFLoader.js'),
+          import(threeUrl),
+          import(orbitUrl),
+          import(gltfUrl),
         ]);
-        return {{ THREE, OrbitControls: orbitModule.OrbitControls, GLTFLoader: gltfModule.GLTFLoader, revokeUrls: () => {{}} }};
+        return {{ THREE, OrbitControls: orbitModule.OrbitControls, GLTFLoader: gltfModule.GLTFLoader, revokeUrls }};
       }} catch (error) {{
-        throw new Error('无法加载 three.js 依赖（离线依赖不可用且 CDN 访问失败）。请在项目目录执行脚本，或检查网络后重试。');
+        revokeUrls();
+        throw new Error('离线 three.js 依赖加载失败，请重新下载 threejs 目录后重试。');
       }}
     }}
 
@@ -649,38 +653,78 @@ def to_model_payload(file: Path) -> dict[str, object]:
     }
 
 
-def load_embedded_three_modules() -> dict[str, str]:
-    candidates = []
-    script_path = Path(__file__).resolve()
-    candidates.append(script_path.parent.parent)
-    cwd = Path.cwd().resolve()
-    candidates.append(cwd)
-    candidates.extend(cwd.parents)
+def get_offline_three_dir() -> Path:
+    return Path(__file__).resolve().parent / OFFLINE_THREE_DIRNAME
 
-    def find_three_root() -> Path | None:
-        seen: set[str] = set()
-        for base in candidates:
-            key = str(base)
-            if key in seen:
-                continue
-            seen.add(key)
-            root = base / 'node_modules' / 'three'
-            if root.is_dir():
-                return root
-        return None
 
-    three_root = find_three_root()
-    if not three_root:
-        return {}
+def ensure_offline_three_modules(three_dir: Path) -> None:
+  def download_with_urllib(download_url: str) -> bytes:
+    with urlopen(download_url, timeout=30) as resp:
+      return resp.read()
 
+  def download_with_curl(download_url: str, allow_insecure: bool) -> bytes:
+    cmd = ['curl', '-fL', '--connect-timeout', '20', '--max-time', '120', download_url]
+    if allow_insecure:
+      cmd.insert(1, '-k')
+    proc = subprocess.run(cmd, capture_output=True)
+    if proc.returncode != 0:
+      stderr = proc.stderr.decode('utf-8', errors='ignore').strip()
+      mode = 'curl -k' if allow_insecure else 'curl'
+      raise RuntimeError(f'{mode} 下载失败: {stderr or "unknown error"}')
+    return proc.stdout
+
+  def download_three_file(download_url: str) -> bytes:
+    errors: list[str] = []
+    try:
+      data = download_with_urllib(download_url)
+      if data:
+        return data
+      errors.append('urllib 返回空响应')
+    except (URLError, ssl.SSLError) as exc:
+      errors.append(f'urllib: {exc}')
+
+    try:
+      data = download_with_curl(download_url, allow_insecure=False)
+      if data:
+        return data
+      errors.append('curl 返回空响应')
+    except RuntimeError as exc:
+      errors.append(str(exc))
+
+    try:
+      data = download_with_curl(download_url, allow_insecure=True)
+      if data:
+        print(f'警告: 使用非证书校验方式下载 {download_url}')
+        return data
+      errors.append('curl -k 返回空响应')
+    except RuntimeError as exc:
+      errors.append(str(exc))
+
+    raise RuntimeError(f'下载离线 three.js 失败: {download_url} ({"; ".join(errors)})')
+
+  three_dir.mkdir(parents=True, exist_ok=True)
+  for rel_path, url in OFFLINE_THREE_SOURCES.items():
+    target = three_dir / rel_path
+    if target.is_file():
+      continue
+    target.parent.mkdir(parents=True, exist_ok=True)
+    data = download_three_file(url)
+    if not data:
+      raise RuntimeError(f'下载离线 three.js 失败: {url} (空响应)')
+    target.write_bytes(data)
+
+
+def load_embedded_three_modules(three_dir: Path) -> dict[str, str]:
     paths = {
-        'three': three_root / 'build' / 'three.module.js',
-        'orbitControls': three_root / 'examples' / 'jsm' / 'controls' / 'OrbitControls.js',
-        'gltfLoader': three_root / 'examples' / 'jsm' / 'loaders' / 'GLTFLoader.js',
-        'bufferGeometryUtils': three_root / 'examples' / 'jsm' / 'utils' / 'BufferGeometryUtils.js',
+        'three': three_dir / 'build' / 'three.module.js',
+        'orbitControls': three_dir / 'examples' / 'jsm' / 'controls' / 'OrbitControls.js',
+        'gltfLoader': three_dir / 'examples' / 'jsm' / 'loaders' / 'GLTFLoader.js',
+        'bufferGeometryUtils': three_dir / 'examples' / 'jsm' / 'utils' / 'BufferGeometryUtils.js',
     }
-    if not all(path.is_file() for path in paths.values()):
-        return {}
+    missing = [str(path) for path in paths.values() if not path.is_file()]
+    if missing:
+        missing_text = '\n'.join(missing)
+        raise FileNotFoundError(f'缺少离线 three.js 文件:\n{missing_text}')
 
     payload: dict[str, str] = {}
     for key, path in paths.items():
@@ -733,7 +777,15 @@ def main() -> int:
         return 1
 
     models = [to_model_payload(file) for file in glb_files]
-    three_modules = load_embedded_three_modules()
+
+    three_dir = get_offline_three_dir()
+    try:
+      ensure_offline_three_modules(three_dir)
+      three_modules = load_embedded_three_modules(three_dir)
+    except (RuntimeError, FileNotFoundError) as exc:
+      print(exc)
+      return 1
+
     html = build_html(models, title=args.title, three_modules=three_modules)
 
     output = Path(args.output).expanduser().resolve()
@@ -743,10 +795,7 @@ def main() -> int:
     total_size_mb = sum(m['size'] for m in models) / (1024 * 1024)
     print(f'已打包 {len(models)} 个 GLB 文件到: {output}')
     print(f'模型总大小: {total_size_mb:.2f} MB')
-    if three_modules:
-        print('three.js 依赖来源: 已内嵌本地 node_modules（离线可用）')
-    else:
-        print('three.js 依赖来源: CDN（请保证可访问 unpkg）')
+    print(f'three.js 依赖来源: {three_dir}（已内嵌到 HTML，离线可用）')
     return 0
 
 

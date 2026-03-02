@@ -9,4 +9,5 @@ U-SAM/weight
 cpponnx/inference_onnx
 pyproject.toml
 .python-version
-
+threejs
+packed_glb_viewer.html
