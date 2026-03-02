@@ -168,6 +168,8 @@ class Mode2Settings:
 
 MODE1_SETUP_ENTER_COUNT = 0
 MODE2_SETUP_ENTER_COUNT = 0
+MODE1_LAST_INPUT_PATH = ""
+MODE2_LAST_INPUT_PATH = ""
 
 
 def cat_line(text: str) -> str:
@@ -215,6 +217,7 @@ def show_mode1_input_help():
             "或输入一个包含npz集合的文件夹路径",
             "或输入一个 .txt 文件路径（内容可空格/换行分割）",
             "不建议超过10个文件时直接输入列表，建议用txt避免终端长度限制",
+            "可直接按回车使用上次输入的路径",
             "输入 h 显示冷笑话，输入 s 返回主菜单，输入 q 退出程序",
         ],
     )
@@ -229,6 +232,8 @@ def show_mode2_input_help(settings: Mode2Settings):
             "或输入一个包含glb集合的文件夹路径",
             "或输入一个 .txt 文件路径（内容可空格/换行分割）",
             "不建议超过10个文件时直接输入列表，建议用txt避免终端长度限制",
+            "可直接按回车使用上次输入的路径",
+            "输入 o 使用 /output 文件夹作为输入",
             "输入 h 显示冷笑话，输入 s 返回主菜单，输入 q 退出程序",
         ],
     )
@@ -4639,13 +4644,13 @@ def convert_glb_files_to_html(glb_files: Sequence[Path], out_dir: str | Path) ->
             }
         )
 
-    html = build_pack_style_html(models, title="楼上的下来")
+    html = build_pack_style_html(models, title=random.choice(COLD_JOKES))
     out_file.write_text(html, encoding="utf-8")
     return [out_file]
 
 
 def ask_yes_no(question: str, default: bool) -> bool:
-    default_text = "Y/n" if default else "y/N"
+    default_text = "Y[默认] / n" if default else "y / N[默认]"
     while True:
         user_input = input(f"{question} [{default_text}]：").strip().lower()
         if user_input == "":
@@ -4664,9 +4669,9 @@ def ask_path(question: str, default_path: str) -> str:
 
 def choose_mode_interactive(default_mode: int = 1) -> int:
     print_box(
-        "主菜单",
+        "----主菜单----",
         [
-            "【0】选择模式",
+            "----选择模式----",
             "  1. npz转glb/html/带有glb的html（默认）",
             "  2. 多个glb转html",
         ],
@@ -4683,13 +4688,13 @@ def choose_mode_interactive(default_mode: int = 1) -> int:
 
 def show_mode1_settings(settings: Mode1Settings):
     lines = [
-        f"【1】导出2D HTML：{'是' if settings.export_2d else '否'}",
-        f"【1.1】2D HTML目录：{settings.out_2d if settings.export_2d else '未启用'}",
-        f"【2】导出GLB：{'是' if settings.export_glb else '否'}",
-        f"【2.1】GLB目录：{settings.out_glb if settings.export_glb else '未启用'}",
-        f"【3】导出3D HTML：{'是' if settings.export_3d else '否'}",
-        f"【3.1】3D HTML目录：{settings.out_3d if settings.export_3d else '未启用'}",
-        f"【4】ann_threshold：{settings.ann_threshold}",
+        f"[1]   导出2D HTML：{'是' if settings.export_2d else '否'}",
+        f"[1.1] 2D HTML目录：{settings.out_2d if settings.export_2d else '未启用'}",
+        f"[2]   导出GLB：{'是' if settings.export_glb else '否'}",
+        f"[2.1] GLB目录：{settings.out_glb if settings.export_glb else '未启用'}",
+        f"[3]   导出3D HTML：{'是' if settings.export_3d else '否'}",
+        f"[3.1] 3D HTML目录：{settings.out_3d if settings.export_3d else '未启用'}",
+        f"[4]   ann_threshold：{settings.ann_threshold}",
     ]
     print_box("模式1当前设置", lines)
 
@@ -4705,20 +4710,20 @@ def setup_mode1_interactive(settings: Mode1Settings):
             settings.out_glb = "output"
             settings.out_3d = "output"
 
-    print_box("模式1设置", ["按提示设置，直接回车可使用当前默认值"]) 
-    settings.export_2d = ask_yes_no("【1. 是否导出2d html文件】", settings.export_2d)
+    print_box("----模式1:设置----", ["按提示设置，直接回车可使用当前默认值"]) 
+    settings.export_2d = ask_yes_no("[1.   是否导出2d html文件]  ", settings.export_2d)
     if settings.export_2d:
-        settings.out_2d = ask_path("【1.1 导出2d html文件的位置】", settings.out_2d)
+        settings.out_2d = ask_path("[1.1] 导出2d html文件的位置", settings.out_2d)
 
-    settings.export_glb = ask_yes_no("【2. 是否导出glb文件】", settings.export_glb)
+    settings.export_glb = ask_yes_no("[2.   是否导出glb文件]  ", settings.export_glb)
     if settings.export_glb:
-        settings.out_glb = ask_path("【2.1 导出glb文件的位置】", settings.out_glb)
+        settings.out_glb = ask_path("[2.1] 导出glb文件的位置", settings.out_glb)
 
-    settings.export_3d = ask_yes_no("【3. 同时导出3d html文件】", settings.export_3d)
+    settings.export_3d = ask_yes_no("[3.   是否导出3d html文件]  ", settings.export_3d)
     if settings.export_3d:
-        settings.out_3d = ask_path("【3.1 导出3d html文件的位置】", settings.out_3d)
+        settings.out_3d = ask_path("[3.1] 导出3d html文件的位置", settings.out_3d)
 
-    ann_text = input(f"【4. 标注阈值 ann_threshold】（默认 {settings.ann_threshold}）: ").strip()
+    ann_text = input(f"[4.   标注阈值 ann_threshold]（默认 {settings.ann_threshold}）: ").strip()
     if ann_text:
         try:
             settings.ann_threshold = float(ann_text)
@@ -4736,7 +4741,7 @@ def setup_mode2_interactive(settings: Mode2Settings):
             settings.out_html = "output/packed_glb_viewer.html"
 
     print_box("模式2设置", ["你可以设置输出HTML文件路径（可为目录或.html文件）"])
-    settings.out_html = ask_path("【A. 导出html文件的位置】", settings.out_html)
+    settings.out_html = ask_path("[导出html文件的位置]", settings.out_html)
 
 
 def print_outputs(outputs: Sequence[Path]):
@@ -4747,11 +4752,21 @@ def print_outputs(outputs: Sequence[Path]):
 
 
 def mode1_loop(settings: Mode1Settings) -> str:
+    global MODE1_LAST_INPUT_PATH
     show_mode1_settings(settings)
     show_mode1_input_help()
 
     while True:
         text = input("\n[模式1] 请输入：").strip()
+        if text == "":
+            if MODE1_LAST_INPUT_PATH:
+                text = MODE1_LAST_INPUT_PATH
+                print_box("默认输入", [f"已使用上次输入路径：{text}"])
+            else:
+                print_box("输入错误", ["当前没有上次输入路径，请先输入一次有效路径"])
+                show_mode1_input_help()
+                show_joke_box()
+                continue
         if text.lower() == "h":
             show_joke_box("模式1冷笑话")
             continue
@@ -4769,6 +4784,8 @@ def mode1_loop(settings: Mode1Settings) -> str:
             show_joke_box()
             continue
 
+        MODE1_LAST_INPUT_PATH = text
+
         try:
             outputs = convert_npz_set(npz_files, settings)
             print_outputs(outputs)
@@ -4779,10 +4796,28 @@ def mode1_loop(settings: Mode1Settings) -> str:
 
 
 def mode2_loop(settings: Mode2Settings) -> str:
+    global MODE2_LAST_INPUT_PATH
     show_mode2_input_help(settings)
 
     while True:
         text = input("\n[模式2] 请输入：").strip()
+        if text == "":
+            if MODE2_LAST_INPUT_PATH:
+                text = MODE2_LAST_INPUT_PATH
+                print_box("默认输入", [f"已使用上次输入路径：{text}"])
+            else:
+                print_box("输入错误", ["当前没有上次输入路径，请先输入一次有效路径"])
+                show_mode2_input_help(settings)
+                show_joke_box()
+                continue
+        if text.lower() == "o":
+            output_abs = Path("/output")
+            output_rel = Path("output")
+            if output_abs.exists() and output_abs.is_dir():
+                text = str(output_abs)
+            else:
+                text = str(output_rel)
+            print_box("快捷输入", [f"已使用输入目录：{text}"])
         if text.lower() == "h":
             show_joke_box("模式2冷笑话")
             continue
@@ -4799,6 +4834,8 @@ def mode2_loop(settings: Mode2Settings) -> str:
             show_mode2_input_help(settings)
             show_joke_box()
             continue
+
+        MODE2_LAST_INPUT_PATH = text
 
         try:
             outputs = convert_glb_files_to_html(glb_files, settings.out_html)
