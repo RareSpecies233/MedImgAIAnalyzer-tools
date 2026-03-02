@@ -12,11 +12,19 @@ def ask(prompt: str, default: str | None = None) -> str:
 
 
 def main() -> None:
-    npz_raw = input("请输入要批量推理的 npz 文件路径（空格分隔）: ").strip()
-    if not npz_raw:
+    txt_path = input("请输入包含以空格分割 npz 文件路径的 txt 文件路径: ").strip()
+    if not txt_path:
         print("未输入任何路径，退出")
         return
-    npz_paths = npz_raw.split()
+    txt_p = Path(txt_path)
+    if not txt_p.is_file():
+        print(f"文件不存在或不是文件: {txt_p}，退出")
+        return
+    content = txt_p.read_text(encoding="utf-8").strip()
+    if not content:
+        print("txt 文件为空，退出")
+        return
+    npz_paths = content.split()
 
     mode = ask("推理后端（onnx/pth）", "onnx")
     if mode not in ("onnx", "pth"):
