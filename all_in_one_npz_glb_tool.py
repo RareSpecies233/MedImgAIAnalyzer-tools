@@ -196,6 +196,44 @@ def print_box(title: str, lines: Sequence[str]):
     print("└" + "─" * width + "┘")
 
 
+def show_joke_box(title: str = "冷笑话时间"):
+    print_box(title, [random.choice(COLD_JOKES)])
+
+
+def get_base12(file_path: Path) -> str:
+    base = file_path.stem[:12]
+    if not base:
+        return "output"
+    return re.sub(r"[^0-9a-zA-Z_\-\u4e00-\u9fff]", "_", base)
+
+
+def show_mode1_input_help():
+    print_box(
+        "模式1输入说明",
+        [
+            "输入多个npz文件路径（空格分割）",
+            "或输入一个包含npz集合的文件夹路径",
+            "或输入一个 .txt 文件路径（内容可空格/换行分割）",
+            "不建议超过10个文件时直接输入列表，建议用txt避免终端长度限制",
+            "输入 h 显示冷笑话，输入 s 返回主菜单，输入 q 退出程序",
+        ],
+    )
+
+
+def show_mode2_input_help(settings: Mode2Settings):
+    print_box(
+        "模式2输入说明",
+        [
+            f"当前输出：{Path(settings.out_html).expanduser().resolve()}",
+            "输入多个glb文件路径（空格分割）",
+            "或输入一个包含glb集合的文件夹路径",
+            "或输入一个 .txt 文件路径（内容可空格/换行分割）",
+            "不建议超过10个文件时直接输入列表，建议用txt避免终端长度限制",
+            "输入 h 显示冷笑话，输入 s 返回主菜单，输入 q 退出程序",
+        ],
+    )
+
+
 def natural_sort_key(s: str):
     parts = re.split(r"(\d+)", s)
     return [int(p) if p.isdigit() else p.lower() for p in parts]
@@ -4534,8 +4572,7 @@ def convert_npz_set(npz_files: Sequence[Path], settings: Mode1Settings) -> list[
     z_count, h, w = vol_raw_u8.shape
 
     outputs: list[Path] = []
-    stem = npz_files[0].parent.name + "_" + npz_files[0].stem + f"_to_{npz_files[-1].stem}"
-    stem = re.sub(r"[^0-9a-zA-Z_\-]+", "_", stem)
+    base12 = get_base12(npz_files[0])
 
     if settings.export_2d:
         raw_b64 = [to_png_base64(vol_raw_u8[z]) for z in range(z_count)]
@@ -4548,7 +4585,7 @@ def convert_npz_set(npz_files: Sequence[Path], settings: Mode1Settings) -> list[
             "height": int(h),
         }
         out_2d_dir = ensure_dir(settings.out_2d)
-        out_2d = out_2d_dir / f"{stem}_2d.html"
+        out_2d = out_2d_dir / f"{base12}_2d.html"
         out_2d.write_text(make_2d_html(payload), encoding="utf-8")
         outputs.append(out_2d)
 
@@ -4567,14 +4604,14 @@ def convert_npz_set(npz_files: Sequence[Path], settings: Mode1Settings) -> list[
 
     if settings.export_glb and glb_bytes is not None:
         out_glb_dir = ensure_dir(settings.out_glb)
-        out_glb = out_glb_dir / f"{stem}.glb"
+        out_glb = out_glb_dir / f"{base12}.glb"
         out_glb.write_bytes(glb_bytes)
         outputs.append(out_glb)
 
     if settings.export_3d and glb_bytes is not None:
         out_3d_dir = ensure_dir(settings.out_3d)
-        out_3d = out_3d_dir / f"{stem}_3d.html"
-        out_3d.write_text(make_embedded_glb_viewer_html(glb_bytes, title=f"{stem} 3D Viewer"), encoding="utf-8")
+        out_3d = out_3d_dir / f"{base12}_3d.html"
+        out_3d.write_text(make_embedded_glb_viewer_html(glb_bytes, title=f"{base12} 3D Viewer"), encoding="utf-8")
         outputs.append(out_3d)
 
     return outputs
@@ -4582,13 +4619,14 @@ def convert_npz_set(npz_files: Sequence[Path], settings: Mode1Settings) -> list[
 
 def convert_glb_files_to_html(glb_files: Sequence[Path], out_dir: str | Path) -> list[Path]:
     glb_files = sorted(glb_files, key=lambda x: natural_sort_key(str(x)))
+    base12 = get_base12(glb_files[0])
     out_target = Path(out_dir).expanduser()
     if out_target.suffix.lower() == ".html":
-        out_file = out_target.resolve()
+        out_file = out_target.resolve().parent / f"{base12}_packed.html"
         out_file.parent.mkdir(parents=True, exist_ok=True)
     else:
         out_dir_obj = ensure_dir(out_target)
-        out_file = out_dir_obj / "packed_glb_viewer.html"
+        out_file = out_dir_obj / f"{base12}_packed.html"
 
     models = []
     for glb in glb_files:
@@ -4639,7 +4677,8 @@ def choose_mode_interactive(default_mode: int = 1) -> int:
             return default_mode
         if text in {"1", "2"}:
             return int(text)
-        print(cat_line("请输入 1 或 2"))
+        print_box("输入错误", ["请输入 1 或 2"])
+        show_joke_box()
 
 
 def show_mode1_settings(settings: Mode1Settings):
@@ -4702,81 +4741,72 @@ def setup_mode2_interactive(settings: Mode2Settings):
 
 def print_outputs(outputs: Sequence[Path]):
     if not outputs:
-        print(cat_line("本次没有输出文件"))
+        print_box("输出结果", [cat_line("本次没有输出文件")])
         return
-    print(cat_line("转换完成，输出文件如下"))
-    for out in outputs:
-        print(f"- {out}")
+    print_box("输出结果", [cat_line("转换完成，输出文件如下")] + [f"- {out}" for out in outputs])
 
 
 def mode1_loop(settings: Mode1Settings) -> str:
     show_mode1_settings(settings)
-    print_box(
-        "模式1输入说明",
-        [
-            "输入多个npz文件路径（空格分割）",
-            "或输入一个包含npz集合的文件夹路径",
-            "或输入一个 .txt 文件路径（内容可空格/换行分割）",
-            "不建议超过10个文件时直接输入列表，建议用txt避免终端长度限制",
-            "输入 s 返回主菜单（可切换模式）",
-            "输入 q 退出程序",
-        ],
-    )
+    show_mode1_input_help()
 
     while True:
         text = input("\n[模式1] 请输入：").strip()
+        if text.lower() == "h":
+            show_joke_box("模式1冷笑话")
+            continue
         if text.lower() == "q":
-            print(cat_line("程序即将退出"))
+            print_box("程序状态", [cat_line("程序即将退出")])
             return "quit"
         if text.lower() == "s":
-            print(cat_line("返回主菜单，重新开始设置"))
+            print_box("程序状态", [cat_line("返回主菜单，重新开始设置")])
             return "restart"
 
         npz_files = parse_input_to_files(text, ".npz")
         if not npz_files:
-            print(cat_line("未找到有效 npz 文件，请检查输入路径是否存在且包含 .npz"))
+            print_box("输入错误", ["未找到有效 npz 文件，请检查输入路径是否存在且包含 .npz"])
+            show_mode1_input_help()
+            show_joke_box()
             continue
 
         try:
             outputs = convert_npz_set(npz_files, settings)
             print_outputs(outputs)
         except Exception as exc:
-            print(cat_line(f"转换失败：{exc}"))
+            print_box("转换错误", [f"转换失败：{exc}"])
+            show_mode1_input_help()
+            show_joke_box()
 
 
 def mode2_loop(settings: Mode2Settings) -> str:
-    print_box(
-        "模式2输入说明",
-        [
-            f"当前输出：{Path(settings.out_html).expanduser().resolve()}",
-            "输入多个glb文件路径（空格分割）",
-            "或输入一个包含glb集合的文件夹路径",
-            "或输入一个 .txt 文件路径（内容可空格/换行分割）",
-            "不建议超过10个文件时直接输入列表，建议用txt避免终端长度限制",
-            "输入 s 返回主菜单（可切换模式）",
-            "输入 q 退出程序",
-        ],
-    )
+    show_mode2_input_help(settings)
 
     while True:
         text = input("\n[模式2] 请输入：").strip()
+        if text.lower() == "h":
+            show_joke_box("模式2冷笑话")
+            continue
         if text.lower() == "q":
-            print(cat_line("程序即将退出"))
+            print_box("程序状态", [cat_line("程序即将退出")])
             return "quit"
         if text.lower() == "s":
-            print(cat_line("返回主菜单，重新开始设置"))
+            print_box("程序状态", [cat_line("返回主菜单，重新开始设置")])
             return "restart"
 
         glb_files = parse_input_to_files(text, ".glb")
         if not glb_files:
-            print(cat_line("未找到有效 glb 文件，请检查输入路径是否存在且包含 .glb"))
+            print_box("输入错误", ["未找到有效 glb 文件，请检查输入路径是否存在且包含 .glb"])
+            show_mode2_input_help(settings)
+            show_joke_box()
             continue
 
         try:
             outputs = convert_glb_files_to_html(glb_files, settings.out_html)
             print_outputs(outputs)
         except Exception as exc:
-            print(cat_line(f"转换失败：{exc}"))
+            print_box("转换错误", [f"转换失败：{exc}"])
+            show_mode2_input_help(settings)
+            show_joke_box()
 
 
 def apply_args_to_mode1_settings(args, settings: Mode1Settings):
@@ -4876,8 +4906,7 @@ def print_welcome():
             "我可以帮你做 NPZ/GLB 到可视化页面的转换",
         ],
     )
-    print("给你讲个冷笑话：")
-    print(random.choice(COLD_JOKES))
+    show_joke_box("开场冷笑话")
 
 
 def interactive_main_loop(mode1_settings: Mode1Settings, mode2_settings: Mode2Settings):
