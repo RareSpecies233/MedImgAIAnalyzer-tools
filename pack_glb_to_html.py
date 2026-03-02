@@ -5,9 +5,10 @@ import argparse
 import base64
 import json
 from pathlib import Path
+from urllib.request import urlopen
 
 
-HTML_TEMPLATE = """<!doctype html>
+HTML_TEMPLATE = r"""<!doctype html>
 <html lang="zh-CN">
 <head>
   <meta charset="UTF-8" />
@@ -215,49 +216,28 @@ HTML_TEMPLATE = """<!doctype html>
         return url;
       }};
 
-      const hasEmbedded = Boolean(
-        threeModules?.three &&
-        threeModules?.orbitControls &&
-        threeModules?.gltfLoader &&
-        threeModules?.bufferGeometryUtils,
-      );
-
-      if (hasEmbedded) {{
-        try {{
-          const threeSource = decodeBase64Text(threeModules.three);
-          const orbitSourceRaw = decodeBase64Text(threeModules.orbitControls);
-          const gltfSourceRaw = decodeBase64Text(threeModules.gltfLoader);
-          const bufferUtilsRaw = decodeBase64Text(threeModules.bufferGeometryUtils);
-
-          const threeUrl = toBlobUrl(threeSource);
-          const bufferUtilsUrl = toBlobUrl(rewriteThreeImport(bufferUtilsRaw, threeUrl));
-          const orbitUrl = toBlobUrl(rewriteThreeImport(orbitSourceRaw, threeUrl));
-          const gltfSource = rewriteThreeImport(gltfSourceRaw, threeUrl)
-            .replace(/from\\s+['\"]\\.\\.\\/utils\\/BufferGeometryUtils\\.js['\"]\\s*;/g, `from '${{bufferUtilsUrl}}';`);
-          const gltfUrl = toBlobUrl(gltfSource);
-
-          const [THREE, orbitModule, gltfModule] = await Promise.all([
-            import(threeUrl),
-            import(orbitUrl),
-            import(gltfUrl),
-          ]);
-          return {{ THREE, OrbitControls: orbitModule.OrbitControls, GLTFLoader: gltfModule.GLTFLoader, revokeUrls }};
-        }} catch (error) {{
-          console.error('内嵌 three 依赖加载失败，改用 CDN 兜底', error);
-          revokeUrls();
-        }}
+      if (!(threeModules?.three && threeModules?.orbitControls && threeModules?.gltfLoader && threeModules?.bufferGeometryUtils)) {{
+        throw new Error('导出的 HTML 未携带完整 three.js 模块数据。请重新运行打包脚本。');
       }}
 
-      try {{
-        const [THREE, orbitModule, gltfModule] = await Promise.all([
-          import('https://unpkg.com/three@0.160.0/build/three.module.js'),
-          import('https://unpkg.com/three@0.160.0/examples/jsm/controls/OrbitControls.js'),
-          import('https://unpkg.com/three@0.160.0/examples/jsm/loaders/GLTFLoader.js'),
-        ]);
-        return {{ THREE, OrbitControls: orbitModule.OrbitControls, GLTFLoader: gltfModule.GLTFLoader, revokeUrls: () => {{}} }};
-      }} catch (error) {{
-        throw new Error('无法加载 three.js 依赖（离线依赖不可用且 CDN 访问失败）。请在项目目录执行脚本，或检查网络后重试。');
-      }}
+      const threeSource = decodeBase64Text(threeModules.three);
+      const orbitSourceRaw = decodeBase64Text(threeModules.orbitControls);
+      const gltfSourceRaw = decodeBase64Text(threeModules.gltfLoader);
+      const bufferUtilsRaw = decodeBase64Text(threeModules.bufferGeometryUtils);
+
+      const threeUrl = toBlobUrl(threeSource);
+      const bufferUtilsUrl = toBlobUrl(rewriteThreeImport(bufferUtilsRaw, threeUrl));
+      const orbitUrl = toBlobUrl(rewriteThreeImport(orbitSourceRaw, threeUrl));
+      const gltfSource = rewriteThreeImport(gltfSourceRaw, threeUrl)
+        .replace(/from\s+['"]\.\.\/utils\/BufferGeometryUtils\.js['"]\s*;/g, `from '${{bufferUtilsUrl}}';`);
+      const gltfUrl = toBlobUrl(gltfSource);
+
+      const [THREE, orbitModule, gltfModule] = await Promise.all([
+        import(threeUrl),
+        import(orbitUrl),
+        import(gltfUrl),
+      ]);
+      return {{ THREE, OrbitControls: orbitModule.OrbitControls, GLTFLoader: gltfModule.GLTFLoader, revokeUrls }};
     }}
 
     let THREE;
@@ -650,42 +630,18 @@ def to_model_payload(file: Path) -> dict[str, object]:
 
 
 def load_embedded_three_modules() -> dict[str, str]:
-    candidates = []
-    script_path = Path(__file__).resolve()
-    candidates.append(script_path.parent.parent)
-    cwd = Path.cwd().resolve()
-    candidates.append(cwd)
-    candidates.extend(cwd.parents)
+  module_urls = {
+    'three': 'https://unpkg.com/three@0.160.0/build/three.module.js',
+    'orbitControls': 'https://unpkg.com/three@0.160.0/examples/jsm/controls/OrbitControls.js',
+    'gltfLoader': 'https://unpkg.com/three@0.160.0/examples/jsm/loaders/GLTFLoader.js',
+    'bufferGeometryUtils': 'https://unpkg.com/three@0.160.0/examples/jsm/utils/BufferGeometryUtils.js',
+  }
 
-    def find_three_root() -> Path | None:
-        seen: set[str] = set()
-        for base in candidates:
-            key = str(base)
-            if key in seen:
-                continue
-            seen.add(key)
-            root = base / 'node_modules' / 'three'
-            if root.is_dir():
-                return root
-        return None
-
-    three_root = find_three_root()
-    if not three_root:
-        return {}
-
-    paths = {
-        'three': three_root / 'build' / 'three.module.js',
-        'orbitControls': three_root / 'examples' / 'jsm' / 'controls' / 'OrbitControls.js',
-        'gltfLoader': three_root / 'examples' / 'jsm' / 'loaders' / 'GLTFLoader.js',
-        'bufferGeometryUtils': three_root / 'examples' / 'jsm' / 'utils' / 'BufferGeometryUtils.js',
-    }
-    if not all(path.is_file() for path in paths.values()):
-        return {}
-
-    payload: dict[str, str] = {}
-    for key, path in paths.items():
-        payload[key] = base64.b64encode(path.read_bytes()).decode('ascii')
-    return payload
+  payload: dict[str, str] = {}
+  for key, url in module_urls.items():
+    with urlopen(url, timeout=20) as response:
+      payload[key] = base64.b64encode(response.read()).decode('ascii')
+  return payload
 
 
 def build_html(models: list[dict[str, object]], title: str, three_modules: dict[str, str]) -> str:
@@ -743,10 +699,7 @@ def main() -> int:
     total_size_mb = sum(m['size'] for m in models) / (1024 * 1024)
     print(f'已打包 {len(models)} 个 GLB 文件到: {output}')
     print(f'模型总大小: {total_size_mb:.2f} MB')
-    if three_modules:
-        print('three.js 依赖来源: 已内嵌本地 node_modules（离线可用）')
-    else:
-        print('three.js 依赖来源: CDN（请保证可访问 unpkg）')
+    print('three.js 依赖来源: 已内嵌到导出 HTML（页面离线可用）')
     return 0
 
 
