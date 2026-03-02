@@ -18,6 +18,7 @@
 - [通用 cpp 编译脚本](buildmacOS.sh)
 - [PyTorch 环境检测脚本](ifpytorch.py)
 - [支持prompt mode 3的onnx/pth推理脚本](New_infer_mode3.py)
+- [多个GLB转为html 支持同步旋转缩放](pack_glb_to_html.py)
 
 
 ## medical_image_converter.py 用法
