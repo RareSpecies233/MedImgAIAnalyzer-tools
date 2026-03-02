@@ -20,6 +20,7 @@
 - [支持prompt mode 3的onnx/pth推理脚本](New_infer_mode3.py)
 - [多个GLB转为html 支持同步旋转缩放](pack_glb_to_html.py)
 - [NPZ 转 GLB 2d-HTML 3d-HTML all in one 工具](all_in_one_npz_glb_tool.py)
+- [batch_infer_mode3.py](batch_infer_mode3.py) 批量使用[infer_mode3.py](infer_mode3.py)推理npz
 
 
 ## medical_image_converter.py 用法
@@ -52,4 +53,3 @@ python medical_image_converter.py --mode npz2dcm --input ./a.npz --output ./a.dc
 # 5) npz -> nii
 python medical_image_converter.py --mode npz2nii --input ./a.npz --output ./a.nii.gz
 ```
-

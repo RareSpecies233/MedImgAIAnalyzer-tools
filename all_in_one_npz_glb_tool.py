@@ -26,6 +26,7 @@ import random
 import re
 import struct
 import sys
+import unicodedata
 from dataclasses import dataclass
 from io import BytesIO
 from pathlib import Path
@@ -38,6 +39,11 @@ try:
     from skimage.measure import marching_cubes
 except Exception:
     marching_cubes = None
+
+try:
+    import pack_glb_to_html as pack_html
+except Exception:
+    pack_html = None
 
 
 RAW_KEYS = ["image", "img", "raw", "ct", "data", "slice", "input"]
@@ -161,7 +167,33 @@ class Mode1Settings:
 
 @dataclass
 class Mode2Settings:
-    out_html: str = "output"
+    out_html: str = "output/packed_glb_viewer.html"
+
+
+def cat_line(text: str) -> str:
+    return f"{text} 喵～"
+
+
+def display_width(text: str) -> int:
+    width = 0
+    for ch in text:
+        width += 2 if unicodedata.east_asian_width(ch) in {"W", "F"} else 1
+    return width
+
+
+def pad_display(text: str, target_width: int) -> str:
+    return text + " " * max(0, target_width - display_width(text))
+
+
+def print_box(title: str, lines: Sequence[str]):
+    inner = max([display_width(title)] + [display_width(line) for line in lines]) + 2
+    width = inner + 2
+    print("┌" + "─" * width + "┐")
+    print(f"│ {pad_display(title, inner)} │")
+    print("├" + "─" * width + "┤")
+    for line in lines:
+        print(f"│ {pad_display(line, inner)} │")
+    print("└" + "─" * width + "┘")
 
 
 def natural_sort_key(s: str):
@@ -509,91 +541,601 @@ def build_glb_from_meshes(meshes: list[dict]) -> bytes:
     return bytes(output)
 
 
-def make_embedded_glb_viewer_html(glb_bytes: bytes, title: str = "Embedded GLB Viewer") -> str:
-    b64 = base64.b64encode(glb_bytes).decode("ascii")
-    safe_title = title.replace("<", "&lt;").replace(">", "&gt;")
-    return f"""<!doctype html>
-<html>
+PACK_STYLE_HTML_TEMPLATE = r"""<!doctype html>
+<html lang="zh-CN">
 <head>
-  <meta charset=\"utf-8\" />
-  <title>{safe_title}</title>
-  <style>
-    body {{ margin:0; font-family:Arial, Helvetica, sans-serif; background:#101216; color:#e6e6e6; }}
-    #top {{ padding:10px 12px; border-bottom:1px solid #2a2e36; }}
-    #view {{ width:100vw; height:calc(100vh - 44px); }}
-    .hint {{ color:#b6beca; font-size:13px; }}
-  </style>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>{title}</title>
+    <style>
+        :root {{
+            color-scheme: light;
+            --bg: #f8fafc;
+            --card-bg: #ffffff;
+            --border: rgba(148, 163, 184, 0.35);
+            --text: #0f172a;
+            --muted: #64748b;
+            --shadow: 0 10px 30px rgba(2, 6, 23, 0.1);
+        }}
+        * {{ box-sizing: border-box; }}
+        body {{
+            margin: 0;
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif;
+            background: var(--bg);
+            color: var(--text);
+        }}
+        .page {{
+            max-width: 1400px;
+            margin: 0 auto;
+            padding: 20px;
+            display: flex;
+            flex-direction: column;
+            gap: 14px;
+        }}
+        .title {{
+            font-size: 22px;
+            font-weight: 700;
+        }}
+        .grid {{
+            display: grid;
+            grid-template-columns: repeat(2, minmax(0, 1fr));
+            gap: 16px;
+            align-items: start;
+        }}
+        .global-controls {{
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            flex-wrap: wrap;
+        }}
+        .card {{
+            border: 1px solid var(--border);
+            border-radius: 12px;
+            background: var(--card-bg);
+            box-shadow: var(--shadow);
+            padding: 12px;
+            display: flex;
+            flex-direction: column;
+            gap: 10px;
+            min-width: 0;
+        }}
+        .head {{
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            gap: 10px;
+            font-size: 13px;
+            font-weight: 600;
+        }}
+        .meta {{
+            color: var(--muted);
+            font-size: 12px;
+            font-weight: 400;
+            white-space: nowrap;
+        }}
+        .canvas-wrap {{
+            position: relative;
+            border: 1px solid rgba(148, 163, 184, 0.4);
+            border-radius: 10px;
+            overflow: hidden;
+            height: 320px;
+            background: #f8fafc;
+        }}
+        canvas {{
+            width: 100%;
+            height: 100%;
+            display: block;
+            cursor: grab;
+            user-select: none;
+        }}
+        canvas:active {{ cursor: grabbing; }}
+        .overlay {{
+            position: absolute;
+            left: 10px;
+            bottom: 10px;
+            display: flex;
+            flex-direction: column;
+            gap: 4px;
+            padding: 6px 8px;
+            border-radius: 6px;
+            font-size: 11px;
+            color: #0f172a;
+            background: rgba(255, 255, 255, 0.74);
+            pointer-events: none;
+        }}
+        .controls {{
+            display: flex;
+            flex-direction: column;
+            gap: 8px;
+        }}
+        .btn-row {{
+            display: flex;
+            flex-wrap: wrap;
+            gap: 8px;
+        }}
+        button {{
+            border: 1px solid rgba(148, 163, 184, 0.45);
+            border-radius: 8px;
+            background: #ffffff;
+            color: #0f172a;
+            padding: 5px 10px;
+            font-size: 12px;
+            cursor: pointer;
+        }}
+        button:hover {{ background: #f1f5f9; }}
+        .slider {{
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            font-size: 12px;
+            color: var(--muted);
+        }}
+        input[type="range"] {{
+            width: 100%;
+            accent-color: #2563eb;
+        }}
+        .error {{
+            color: #b91c1c;
+            background: #fef2f2;
+            border: 1px solid #fecaca;
+            border-radius: 8px;
+            padding: 8px;
+            font-size: 12px;
+        }}
+        @media (max-width: 1100px) {{
+            .grid {{ grid-template-columns: 1fr; }}
+        }}
+    </style>
 </head>
 <body>
-  <div id=\"top\">{safe_title} · <span class=\"hint\">左键旋转，滚轮缩放，右键平移</span></div>
-  <div id=\"view\"></div>
+    <main class="page">
+        <div class="title">{title}</div>
+        <div class="global-controls">
+            <button id="sync-rotate-btn">同步旋转</button>
+            <button id="sync-zoom-btn">同步缩放</button>
+        </div>
+        <div id="boot-error" class="error" style="display:none"></div>
+        <section id="grid" class="grid"></section>
+    </main>
 
-<script src=\"https://cdn.jsdelivr.net/npm/three@0.128.0/build/three.min.js\"></script>
-<script src=\"https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/controls/OrbitControls.js\"></script>
-<script src=\"https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/loaders/GLTFLoader.js\"></script>
-<script>
-(function() {{
-  const container = document.getElementById('view');
-  const scene = new THREE.Scene();
-  scene.background = new THREE.Color(0x111318);
+    <script type="application/json" id="model-data">{models_json}</script>
+    <script type="application/json" id="three-modules">{three_modules_json}</script>
 
-  const camera = new THREE.PerspectiveCamera(50, container.clientWidth / container.clientHeight, 0.01, 100000);
-  camera.position.set(0, -200, 120);
-  camera.up.set(0, 0, 1);
+    <script type="module">
+        const modelData = JSON.parse(document.getElementById('model-data').textContent || '[]');
+        const threeModules = JSON.parse(document.getElementById('three-modules').textContent || '{{}}');
+        const grid = document.getElementById('grid');
+        const bootError = document.getElementById('boot-error');
+        const syncRotateBtn = document.getElementById('sync-rotate-btn');
+        const syncZoomBtn = document.getElementById('sync-zoom-btn');
 
-  const renderer = new THREE.WebGLRenderer({{ antialias:true }});
-  renderer.setPixelRatio(window.devicePixelRatio || 1);
-  renderer.setSize(container.clientWidth, container.clientHeight);
-  container.appendChild(renderer.domElement);
+        let syncRotateEnabled = false;
+        let syncZoomEnabled = false;
+        let syncLock = false;
+        const viewerApis = [];
 
-  const controls = new THREE.OrbitControls(camera, renderer.domElement);
-  controls.enableDamping = true;
-  controls.dampingFactor = 0.08;
+        function showBootError(message) {{
+            if (!bootError) return;
+            bootError.style.display = 'block';
+            bootError.textContent = message;
+        }}
 
-  scene.add(new THREE.AmbientLight(0xffffff, 0.6));
-  const dl = new THREE.DirectionalLight(0xffffff, 0.8);
-  dl.position.set(1, 1, 1);
-  scene.add(dl);
+        function decodeBase64Text(base64) {{
+            const binary = atob(base64);
+            const bytes = Uint8Array.from(binary, (c) => c.charCodeAt(0));
+            return new TextDecoder().decode(bytes);
+        }}
 
-  const loader = new THREE.GLTFLoader();
-  const b64 = "{b64}";
-  const binary = Uint8Array.from(atob(b64), c => c.charCodeAt(0));
+        function rewriteThreeImport(code, threeUrl) {{
+            return code.replace(/from\s+(['"])three\1/g, `from '${{threeUrl}}'`);
+        }}
 
-  loader.parse(binary.buffer, '', function(gltf) {{
-    scene.add(gltf.scene);
+        async function loadThreeDeps() {{
+            const revokeList = [];
+            const revokeUrls = () => revokeList.forEach((url) => URL.revokeObjectURL(url));
+            const toBlobUrl = (code) => {{
+                const url = URL.createObjectURL(new Blob([code], {{ type: 'text/javascript' }}));
+                revokeList.push(url);
+                return url;
+            }};
 
-    const box = new THREE.Box3().setFromObject(gltf.scene);
-    const size = box.getSize(new THREE.Vector3());
-    const center = box.getCenter(new THREE.Vector3());
-    gltf.scene.position.sub(center);
+            if (!(threeModules?.three && threeModules?.orbitControls && threeModules?.gltfLoader && threeModules?.bufferGeometryUtils)) {{
+                throw new Error('导出的 HTML 未携带完整 three.js 模块数据。请重新运行打包脚本。');
+            }}
 
-    const radius = Math.max(size.x, size.y, size.z) || 1;
-    camera.position.set(0, -radius * 2.2, radius * 1.3);
-    controls.target.set(0, 0, 0);
-    controls.update();
-  }}, function(err) {{
-    alert('GLB 解析失败: ' + (err && err.message ? err.message : err));
-  }});
+            const threeSource = decodeBase64Text(threeModules.three);
+            const orbitSourceRaw = decodeBase64Text(threeModules.orbitControls);
+            const gltfSourceRaw = decodeBase64Text(threeModules.gltfLoader);
+            const bufferUtilsRaw = decodeBase64Text(threeModules.bufferGeometryUtils);
 
-  window.addEventListener('resize', function() {{
-    const w = container.clientWidth;
-    const h = container.clientHeight;
-    camera.aspect = w / h;
-    camera.updateProjectionMatrix();
-    renderer.setSize(w, h);
-  }});
+            const threeUrl = toBlobUrl(threeSource);
+            const bufferUtilsUrl = toBlobUrl(rewriteThreeImport(bufferUtilsRaw, threeUrl));
+            const orbitUrl = toBlobUrl(rewriteThreeImport(orbitSourceRaw, threeUrl));
+            const gltfSource = rewriteThreeImport(gltfSourceRaw, threeUrl)
+                .replace(/from\s+(['"])\.\.\/utils\/BufferGeometryUtils\.js\1/g, `from '${{bufferUtilsUrl}}'`);
+            const gltfUrl = toBlobUrl(gltfSource);
 
-  function animate() {{
-    requestAnimationFrame(animate);
-    controls.update();
-    renderer.render(scene, camera);
-  }}
-  animate();
-}})();
-</script>
+            const [THREE, orbitModule, gltfModule] = await Promise.all([
+                import(threeUrl),
+                import(orbitUrl),
+                import(gltfUrl),
+            ]);
+            return {{ THREE, OrbitControls: orbitModule.OrbitControls, GLTFLoader: gltfModule.GLTFLoader, revokeUrls }};
+        }}
+
+        let THREE;
+        let OrbitControls;
+        let GLTFLoader;
+        let revokeThreeModuleUrls = () => {{}};
+
+        try {{
+            const deps = await loadThreeDeps();
+            THREE = deps.THREE;
+            OrbitControls = deps.OrbitControls;
+            GLTFLoader = deps.GLTFLoader;
+            revokeThreeModuleUrls = deps.revokeUrls;
+        }} catch (error) {{
+            console.error(error);
+            showBootError(error instanceof Error ? error.message : 'three.js 依赖加载失败');
+        }}
+
+        if (!THREE || !OrbitControls || !GLTFLoader) {{
+            throw new Error('three.js 初始化失败');
+        }}
+
+        if (!Array.isArray(modelData) || modelData.length === 0) {{
+            showBootError('未发现可展示的 GLB 模型数据。');
+        }}
+
+        function updateSyncButtons() {{
+            if (syncRotateBtn) syncRotateBtn.textContent = syncRotateEnabled ? '关闭同步旋转' : '同步旋转';
+            if (syncZoomBtn) syncZoomBtn.textContent = syncZoomEnabled ? '关闭同步缩放' : '同步缩放';
+        }}
+
+        function syncFromSource(sourceApi, syncRotateValue, syncZoomValue) {{
+            if (syncLock) return;
+            if (!syncRotateValue && !syncZoomValue) return;
+            syncLock = true;
+            try {{
+                const sourceSpherical = sourceApi.getSpherical();
+                const sourceZoomFactor = sourceApi.getZoomFactor();
+                viewerApis.forEach((targetApi) => {{
+                    if (targetApi === sourceApi) return;
+                    const nextSpherical = targetApi.getSpherical();
+                    if (syncRotateValue) {{
+                        nextSpherical.phi = sourceSpherical.phi;
+                        nextSpherical.theta = sourceSpherical.theta;
+                    }}
+                    if (syncZoomValue) {{
+                        const nextRadius = targetApi.baseDistance / clamp(sourceZoomFactor, 0.4, 3);
+                        nextSpherical.radius = clamp(nextRadius, targetApi.minDistance, targetApi.maxDistance);
+                    }}
+                    targetApi.applySpherical(nextSpherical);
+                }});
+            }} finally {{
+                syncLock = false;
+            }}
+        }}
+
+        if (syncRotateBtn) {{
+            syncRotateBtn.addEventListener('click', () => {{
+                syncRotateEnabled = !syncRotateEnabled;
+                updateSyncButtons();
+            }});
+        }}
+        if (syncZoomBtn) {{
+            syncZoomBtn.addEventListener('click', () => {{
+                syncZoomEnabled = !syncZoomEnabled;
+                updateSyncButtons();
+            }});
+        }}
+        updateSyncButtons();
+
+        const clamp = (v, min, max) => Math.min(Math.max(v, min), max);
+        function formatZoom(v) {{ return `${{v.toFixed(2)}}x`; }}
+        function formatRotation(phi, theta) {{
+            const x = Math.round((phi * 180) / Math.PI);
+            const y = Math.round((theta * 180) / Math.PI);
+            return `${{x}}° / ${{y}}°`;
+        }}
+
+        function decodeBase64ToArrayBuffer(base64) {{
+            const binary = atob(base64);
+            const len = binary.length;
+            const bytes = new Uint8Array(len);
+            for (let i = 0; i < len; i += 1) bytes[i] = binary.charCodeAt(i);
+            return bytes.buffer;
+        }}
+
+        function setWireframe(object, enabled) {{
+            object.traverse((child) => {{
+                if (!child.isMesh) return;
+                const mats = Array.isArray(child.material) ? child.material : [child.material];
+                mats.forEach((m) => {{ if ('wireframe' in m) m.wireframe = enabled; }});
+            }});
+        }}
+
+        function createCard(model) {{
+            const card = document.createElement('article');
+            card.className = 'card';
+            card.innerHTML = `
+                <div class="head">
+                    <span>${{model.name}}</span>
+                    <span class="meta">${{(model.size / 1024).toFixed(1)}} KB</span>
+                </div>
+                <div class="canvas-wrap">
+                    <canvas></canvas>
+                    <div class="overlay">
+                        <span data-role="zoom">缩放 1.00x</span>
+                        <span data-role="rotation">旋转 0° / 0°</span>
+                    </div>
+                </div>
+                <div class="controls">
+                    <div class="btn-row">
+                        <button data-act="reset">重置视角</button>
+                        <button data-act="auto">自动旋转</button>
+                        <button data-act="wire">显示线框</button>
+                        <button data-act="bg">切换背景</button>
+                        <button data-act="export">导出模型</button>
+                    </div>
+                    <label class="slider">
+                        <span>缩放</span>
+                        <input data-role="zoom-slider" type="range" min="0.4" max="3" step="0.05" value="1" />
+                    </label>
+                    <div data-role="error" class="error" style="display:none"></div>
+                </div>
+            `;
+
+            const canvas = card.querySelector('canvas');
+            const zoomText = card.querySelector('[data-role="zoom"]');
+            const rotText = card.querySelector('[data-role="rotation"]');
+            const zoomSlider = card.querySelector('[data-role="zoom-slider"]');
+            const errorBox = card.querySelector('[data-role="error"]');
+
+            const renderer = new THREE.WebGLRenderer({{ canvas, antialias: true, alpha: true }});
+            renderer.setPixelRatio(window.devicePixelRatio || 1);
+            renderer.setClearColor(0xffffff, 0);
+
+            const scene = new THREE.Scene();
+            const camera = new THREE.PerspectiveCamera(45, 1, 0.1, 2000);
+            camera.position.set(0, 0, 4);
+
+            const controls = new OrbitControls(camera, renderer.domElement);
+            controls.enableDamping = true;
+            controls.dampingFactor = 0.08;
+            controls.autoRotate = false;
+            controls.autoRotateSpeed = 1;
+
+            const hemi = new THREE.HemisphereLight(0xffffff, 0x94a3b8, 0.9);
+            scene.add(hemi);
+            const dir = new THREE.DirectionalLight(0xffffff, 0.8);
+            dir.position.set(4, 6, 4);
+            scene.add(dir);
+
+            const modelGroup = new THREE.Group();
+            scene.add(modelGroup);
+
+            let baseDistance = 4;
+            let center = new THREE.Vector3(0, 0, 0);
+            let wireframe = false;
+            let autoRotate = false;
+            let background = 'light';
+            let modelRoot = null;
+            let lastSpherical = new THREE.Spherical(4, Math.PI / 2, 0);
+
+            function updateBackground() {{
+                const color = background === 'dark' ? 0x0f172a : background === 'blue' ? 0x0b2545 : 0xf8fafc;
+                scene.background = new THREE.Color(color);
+            }}
+
+            function updateOverlay() {{
+                const offset = camera.position.clone().sub(controls.target);
+                const sp = new THREE.Spherical().setFromVector3(offset);
+                lastSpherical = new THREE.Spherical(sp.radius, sp.phi, sp.theta);
+                const zoom = clamp(baseDistance / sp.radius, 0.4, 3);
+                zoomText.textContent = `缩放 ${{formatZoom(zoom)}}`;
+                rotText.textContent = `旋转 ${{formatRotation(sp.phi, sp.theta)}}`;
+            }}
+
+            function getSpherical() {{
+                const offset = camera.position.clone().sub(controls.target);
+                return new THREE.Spherical().setFromVector3(offset);
+            }}
+
+            function applySpherical(nextSpherical) {{
+                const nextOffset = new THREE.Vector3().setFromSpherical(nextSpherical);
+                camera.position.copy(controls.target.clone().add(nextOffset));
+                controls.update();
+                updateOverlay();
+                const zoomNow = clamp(baseDistance / nextSpherical.radius, 0.4, 3);
+                zoomSlider.value = zoomNow.toFixed(2);
+            }}
+
+            function getZoomFactor() {{
+                const sp = getSpherical();
+                return clamp(baseDistance / sp.radius, 0.4, 3);
+            }}
+
+            function resize() {{
+                const width = Math.max(1, canvas.clientWidth);
+                const height = Math.max(1, canvas.clientHeight);
+                renderer.setSize(width, height, false);
+                camera.aspect = width / height;
+                camera.updateProjectionMatrix();
+            }}
+
+            function setZoomBySlider() {{
+                const nextZoom = clamp(parseFloat(zoomSlider.value), 0.4, 3);
+                const distance = baseDistance / nextZoom;
+                const sp = getSpherical();
+                sp.radius = distance;
+                applySpherical(sp);
+            }}
+
+            function fitCamera(obj) {{
+                const box = new THREE.Box3().setFromObject(obj);
+                const size = box.getSize(new THREE.Vector3());
+                center = box.getCenter(new THREE.Vector3());
+                const maxDim = Math.max(size.x, size.y, size.z);
+                const fov = THREE.MathUtils.degToRad(camera.fov);
+                const distance = (maxDim / 2) / Math.tan(fov / 2);
+                baseDistance = Math.max(1, distance * 1.4);
+
+                controls.target.copy(center);
+                const direction = new THREE.Vector3(0.2, 0.2, 1).normalize();
+                camera.position.copy(center.clone().add(direction.multiplyScalar(baseDistance)));
+                controls.minDistance = baseDistance * 0.4;
+                controls.maxDistance = baseDistance * 3;
+                controls.update();
+                zoomSlider.value = '1';
+                updateOverlay();
+            }}
+
+            function resetView() {{
+                controls.target.copy(center);
+                const direction = new THREE.Vector3(0.2, 0.2, 1).normalize();
+                camera.position.copy(center.clone().add(direction.multiplyScalar(baseDistance)));
+                controls.update();
+                zoomSlider.value = '1';
+                updateOverlay();
+            }}
+
+            const viewerApi = {{
+                baseDistance: 4,
+                minDistance: 0.1,
+                maxDistance: 2000,
+                getSpherical,
+                getZoomFactor,
+                applySpherical,
+            }};
+            viewerApis.push(viewerApi);
+
+            function downloadRawGlb() {{
+                const bytes = decodeBase64ToArrayBuffer(model.base64);
+                const blob = new Blob([bytes], {{ type: 'model/gltf-binary' }});
+                const url = URL.createObjectURL(blob);
+                const a = document.createElement('a');
+                a.href = url;
+                a.download = model.name;
+                document.body.appendChild(a);
+                a.click();
+                a.remove();
+                URL.revokeObjectURL(url);
+            }}
+
+            card.querySelector('[data-act="reset"]').addEventListener('click', resetView);
+            card.querySelector('[data-act="auto"]').addEventListener('click', (e) => {{
+                autoRotate = !autoRotate;
+                controls.autoRotate = autoRotate;
+                e.currentTarget.textContent = autoRotate ? '停止自动旋转' : '自动旋转';
+            }});
+            card.querySelector('[data-act="wire"]').addEventListener('click', (e) => {{
+                wireframe = !wireframe;
+                if (modelRoot) setWireframe(modelRoot, wireframe);
+                e.currentTarget.textContent = wireframe ? '隐藏线框' : '显示线框';
+            }});
+            card.querySelector('[data-act="bg"]').addEventListener('click', () => {{
+                background = background === 'light' ? 'dark' : background === 'dark' ? 'blue' : 'light';
+                updateBackground();
+            }});
+            card.querySelector('[data-act="export"]').addEventListener('click', downloadRawGlb);
+
+            zoomSlider.addEventListener('input', setZoomBySlider);
+
+            controls.addEventListener('change', () => {{
+                const prev = new THREE.Spherical(lastSpherical.radius, lastSpherical.phi, lastSpherical.theta);
+                updateOverlay();
+                const sp = getSpherical();
+                zoomSlider.value = clamp(baseDistance / sp.radius, 0.4, 3).toFixed(2);
+                const zoomChanged = Math.abs(sp.radius - prev.radius) > 0.001;
+                const rotateChanged =
+                    Math.abs(sp.phi - prev.phi) > 0.001 ||
+                    Math.abs(sp.theta - prev.theta) > 0.001;
+                if (!syncLock && ((syncRotateEnabled && rotateChanged) || (syncZoomEnabled && zoomChanged))) {{
+                    syncFromSource(viewerApi, syncRotateEnabled && rotateChanged, syncZoomEnabled && zoomChanged);
+                }}
+            }});
+
+            const resizeObserver = new ResizeObserver(() => resize());
+            resizeObserver.observe(canvas);
+            resize();
+            updateBackground();
+
+            const loader = new GLTFLoader();
+            try {{
+                const buf = decodeBase64ToArrayBuffer(model.base64);
+                loader.parse(buf, '', (gltf) => {{
+                    modelRoot = gltf.scene;
+                    modelGroup.add(modelRoot);
+                    fitCamera(modelRoot);
+                    viewerApi.baseDistance = baseDistance;
+                    viewerApi.minDistance = controls.minDistance;
+                    viewerApi.maxDistance = controls.maxDistance;
+                }}, (error) => {{
+                    console.error(error);
+                    errorBox.style.display = 'block';
+                    errorBox.textContent = '模型解析失败';
+                }});
+            }} catch (error) {{
+                console.error(error);
+                errorBox.style.display = 'block';
+                errorBox.textContent = '模型解码失败';
+            }}
+
+            let rafId = null;
+            const renderLoop = () => {{
+                controls.update();
+                renderer.render(scene, camera);
+                rafId = requestAnimationFrame(renderLoop);
+            }};
+            rafId = requestAnimationFrame(renderLoop);
+
+            card.__dispose = () => {{
+                if (rafId !== null) cancelAnimationFrame(rafId);
+                resizeObserver.disconnect();
+                controls.dispose();
+                renderer.dispose();
+                const idx = viewerApis.indexOf(viewerApi);
+                if (idx >= 0) viewerApis.splice(idx, 1);
+            }};
+
+            return card;
+        }}
+
+        modelData.forEach((model) => grid.appendChild(createCard(model)));
+
+        window.addEventListener('beforeunload', () => {{
+            [...grid.children].forEach((card) => {{
+                if (typeof card.__dispose === 'function') card.__dispose();
+            }});
+            revokeThreeModuleUrls();
+        }});
+    </script>
 </body>
 </html>
 """
+
+
+def load_embedded_three_modules() -> dict[str, str]:
+    if pack_html is None:
+        raise RuntimeError("未找到 pack_glb_to_html.py，无法加载内嵌 three.js 模块。")
+    return pack_html.load_embedded_three_modules()
+
+
+def build_pack_style_html(models: list[dict[str, object]], title: str) -> str:
+    if pack_html is None:
+        raise RuntimeError("未找到 pack_glb_to_html.py，无法生成与其完全一致的 3D HTML。")
+    three_modules = load_embedded_three_modules()
+    return pack_html.build_html(models, title=title, three_modules=three_modules)
+
+
+def make_embedded_glb_viewer_html(glb_bytes: bytes, title: str = "Embedded GLB Viewer") -> str:
+    model = {
+        "name": f"{title}.glb",
+        "size": len(glb_bytes),
+        "base64": base64.b64encode(glb_bytes).decode("ascii"),
+    }
+    return build_pack_style_html([model], title=title)
 
 
 def load_npz_volume(npz_files: Sequence[Path], ann_threshold: float):
@@ -726,63 +1268,82 @@ def convert_npz_set(npz_files: Sequence[Path], settings: Mode1Settings) -> list[
 
 
 def convert_glb_files_to_html(glb_files: Sequence[Path], out_dir: str | Path) -> list[Path]:
-    out_path = ensure_dir(out_dir)
-    outputs: list[Path] = []
+    glb_files = sorted(glb_files, key=lambda x: natural_sort_key(str(x)))
+    out_target = Path(out_dir).expanduser()
+    if out_target.suffix.lower() == ".html":
+        out_file = out_target.resolve()
+        out_file.parent.mkdir(parents=True, exist_ok=True)
+    else:
+        out_dir_obj = ensure_dir(out_target)
+        out_file = out_dir_obj / "packed_glb_viewer.html"
 
-    for glb in sorted(glb_files, key=lambda x: natural_sort_key(str(x))):
-        glb_bytes = glb.read_bytes()
-        html = make_embedded_glb_viewer_html(glb_bytes, title=f"{glb.name} Viewer")
-        out_file = out_path / f"{glb.stem}.html"
-        out_file.write_text(html, encoding="utf-8")
-        outputs.append(out_file)
+    models = []
+    for glb in glb_files:
+        raw = glb.read_bytes()
+        models.append(
+            {
+                "name": glb.name,
+                "size": len(raw),
+                "base64": base64.b64encode(raw).decode("ascii"),
+            }
+        )
 
-    return outputs
+    html = build_pack_style_html(models, title="楼上的下来")
+    out_file.write_text(html, encoding="utf-8")
+    return [out_file]
 
 
 def ask_yes_no(question: str, default: bool) -> bool:
     default_text = "Y/n" if default else "y/N"
     while True:
-        user_input = input(f"{question} [{default_text}]: ").strip().lower()
+        user_input = input(f"{question} [{default_text}]：").strip().lower()
         if user_input == "":
             return default
         if user_input in {"y", "yes", "是", "1", "true"}:
             return True
         if user_input in {"n", "no", "否", "0", "false"}:
             return False
-        print("输入无效，请输入 y/n（或直接回车使用默认值）。")
+        print(cat_line("输入无效，请输入 y/n（或直接回车使用默认值）"))
 
 
 def ask_path(question: str, default_path: str) -> str:
-    user_input = input(f"{question}（默认: {default_path}）: ").strip()
+    user_input = input(f"{question}（默认: {default_path}）：").strip()
     return user_input if user_input else default_path
 
 
 def choose_mode_interactive(default_mode: int = 1) -> int:
+    print_box(
+        "主菜单",
+        [
+            "【0】选择模式",
+            "  1. npz转glb/html/带有glb的html（默认）",
+            "  2. 多个glb转html",
+        ],
+    )
     while True:
-        text = input("【0. 选择模式】1. npz转glb/html/带有glb的html，2. 多个glb转html（默认1）: ").strip()
+        text = input("请输入模式编号（1/2，回车默认1）：").strip()
         if text == "":
             return default_mode
         if text in {"1", "2"}:
             return int(text)
-        print("请输入 1 或 2。")
+        print(cat_line("请输入 1 或 2"))
 
 
 def show_mode1_settings(settings: Mode1Settings):
-    print("\n当前设置：")
-    print(f"- 【1】导出2D HTML：{'是' if settings.export_2d else '否'}")
-    if settings.export_2d:
-        print(f"  【1.1】2D HTML 目录：{settings.out_2d}")
-    print(f"- 【2】导出GLB：{'是' if settings.export_glb else '否'}")
-    if settings.export_glb:
-        print(f"  【2.1】GLB 目录：{settings.out_glb}")
-    print(f"- 【3】导出3D HTML：{'是' if settings.export_3d else '否'}")
-    if settings.export_3d:
-        print(f"  【3.1】3D HTML 目录：{settings.out_3d}")
-    print(f"- 标注阈值 ann_threshold：{settings.ann_threshold}")
+    lines = [
+        f"【1】导出2D HTML：{'是' if settings.export_2d else '否'}",
+        f"【1.1】2D HTML目录：{settings.out_2d if settings.export_2d else '未启用'}",
+        f"【2】导出GLB：{'是' if settings.export_glb else '否'}",
+        f"【2.1】GLB目录：{settings.out_glb if settings.export_glb else '未启用'}",
+        f"【3】导出3D HTML：{'是' if settings.export_3d else '否'}",
+        f"【3.1】3D HTML目录：{settings.out_3d if settings.export_3d else '未启用'}",
+        f"【4】ann_threshold：{settings.ann_threshold}",
+    ]
+    print_box("模式1当前设置", lines)
 
 
 def setup_mode1_interactive(settings: Mode1Settings):
-    print("\n请进行模式1设置（可直接回车采用默认值）：")
+    print_box("模式1设置", ["按提示设置，直接回车可使用当前默认值"]) 
     settings.export_2d = ask_yes_no("【1. 是否导出2d html文件】", settings.export_2d)
     if settings.export_2d:
         settings.out_2d = ask_path("【1.1 导出2d html文件的位置】", settings.out_2d)
@@ -800,79 +1361,87 @@ def setup_mode1_interactive(settings: Mode1Settings):
         try:
             settings.ann_threshold = float(ann_text)
         except ValueError:
-            print("阈值输入无效，保留原值。")
+            print(cat_line("阈值输入无效，保留原值"))
 
 
 def setup_mode2_interactive(settings: Mode2Settings):
-    print("\n模式2设置：")
+    print_box("模式2设置", ["你可以设置输出HTML文件路径（可为目录或.html文件）"])
     settings.out_html = ask_path("【A. 导出html文件的位置】", settings.out_html)
 
 
 def print_outputs(outputs: Sequence[Path]):
     if not outputs:
-        print("本次没有输出文件。")
+        print(cat_line("本次没有输出文件"))
         return
-    print("转换完成，输出文件：")
+    print(cat_line("转换完成，输出文件如下"))
     for out in outputs:
         print(f"- {out}")
 
 
-def mode1_loop(settings: Mode1Settings):
+def mode1_loop(settings: Mode1Settings) -> str:
     show_mode1_settings(settings)
-    print("\n请输入：")
-    print("- 多个npz文件路径（空格分割），或")
-    print("- 一个包含npz集合的文件夹路径，或")
-    print("- s（重新设置），q（退出）")
+    print_box(
+        "模式1输入说明",
+        [
+            "输入多个npz文件路径（空格分割）",
+            "或输入一个包含npz集合的文件夹路径",
+            "输入 s 返回主菜单（可切换模式）",
+            "输入 q 退出程序",
+        ],
+    )
 
     while True:
-        text = input("\n模式1 输入> ").strip()
+        text = input("\n[模式1] 请输入：").strip()
         if text.lower() == "q":
-            print("已退出。")
-            return
+            print(cat_line("程序即将退出"))
+            return "quit"
         if text.lower() == "s":
-            setup_mode1_interactive(settings)
-            show_mode1_settings(settings)
-            continue
+            print(cat_line("返回主菜单，重新开始设置"))
+            return "restart"
 
         npz_files = parse_input_to_files(text, ".npz")
         if not npz_files:
-            print("未找到有效 npz 文件，请检查输入路径是否存在且包含 .npz。")
+            print(cat_line("未找到有效 npz 文件，请检查输入路径是否存在且包含 .npz"))
             continue
 
         try:
             outputs = convert_npz_set(npz_files, settings)
             print_outputs(outputs)
         except Exception as exc:
-            print(f"转换失败：{exc}")
+            print(cat_line(f"转换失败：{exc}"))
 
 
-def mode2_loop(settings: Mode2Settings):
-    print(f"\n模式2 当前输出目录：{Path(settings.out_html).expanduser().resolve()}")
-    print("请输入：")
-    print("- 多个glb文件路径（空格分割），或")
-    print("- 一个包含glb集合的文件夹路径，或")
-    print("- s（设置），q（退出）")
+def mode2_loop(settings: Mode2Settings) -> str:
+    print_box(
+        "模式2输入说明",
+        [
+            f"当前输出：{Path(settings.out_html).expanduser().resolve()}",
+            "输入多个glb文件路径（空格分割）",
+            "或输入一个包含glb集合的文件夹路径",
+            "输入 s 返回主菜单（可切换模式）",
+            "输入 q 退出程序",
+        ],
+    )
 
     while True:
-        text = input("\n模式2 输入> ").strip()
+        text = input("\n[模式2] 请输入：").strip()
         if text.lower() == "q":
-            print("已退出。")
-            return
+            print(cat_line("程序即将退出"))
+            return "quit"
         if text.lower() == "s":
-            setup_mode2_interactive(settings)
-            print(f"已更新输出目录：{Path(settings.out_html).expanduser().resolve()}")
-            continue
+            print(cat_line("返回主菜单，重新开始设置"))
+            return "restart"
 
         glb_files = parse_input_to_files(text, ".glb")
         if not glb_files:
-            print("未找到有效 glb 文件，请检查输入路径是否存在且包含 .glb。")
+            print(cat_line("未找到有效 glb 文件，请检查输入路径是否存在且包含 .glb"))
             continue
 
         try:
             outputs = convert_glb_files_to_html(glb_files, settings.out_html)
             print_outputs(outputs)
         except Exception as exc:
-            print(f"转换失败：{exc}")
+            print(cat_line(f"转换失败：{exc}"))
 
 
 def apply_args_to_mode1_settings(args, settings: Mode1Settings):
@@ -937,7 +1506,7 @@ def parse_args():
     parser.add_argument("--out-3d", help="3D HTML 输出目录")
 
     parser.add_argument("--ann-threshold", type=float, help="标注阈值（默认0.5）")
-    parser.add_argument("--out-html", help="模式2输出 HTML 目录")
+    parser.add_argument("--out-html", help="模式2输出路径（目录或 .html 文件）")
 
     return parser.parse_args()
 
@@ -947,7 +1516,7 @@ def run_mode1_once_from_args(args, settings: Mode1Settings) -> bool:
     if not npz_files:
         return False
 
-    print(f"命令行模式1：检测到 {len(npz_files)} 个 npz 文件，开始转换...")
+    print(cat_line(f"命令行模式1：检测到 {len(npz_files)} 个 npz 文件，开始转换"))
     outputs = convert_npz_set(npz_files, settings)
     print_outputs(outputs)
     return True
@@ -958,16 +1527,36 @@ def run_mode2_once_from_args(args, settings: Mode2Settings) -> bool:
     if not glb_files:
         return False
 
-    print(f"命令行模式2：检测到 {len(glb_files)} 个 glb 文件，开始转换...")
+    print(cat_line(f"命令行模式2：检测到 {len(glb_files)} 个 glb 文件，开始打包转换"))
     outputs = convert_glb_files_to_html(glb_files, settings.out_html)
     print_outputs(outputs)
     return True
 
 
 def print_welcome():
-    print("\n欢迎使用 All-in-One NPZ/GLB 转换工具！")
+    print_box(
+        "欢迎回来，主人",
+        [
+            "这里是猫娘转换助手~",
+            "我可以帮你做 NPZ/GLB 到可视化页面的转换",
+        ],
+    )
     print("给你讲个冷笑话：")
     print(random.choice(COLD_JOKES))
+
+
+def interactive_main_loop(mode1_settings: Mode1Settings, mode2_settings: Mode2Settings):
+    while True:
+        selected_mode = choose_mode_interactive(default_mode=1)
+        if selected_mode == 1:
+            setup_mode1_interactive(mode1_settings)
+            result = mode1_loop(mode1_settings)
+        else:
+            setup_mode2_interactive(mode2_settings)
+            result = mode2_loop(mode2_settings)
+
+        if result == "quit":
+            return
 
 
 def main():
@@ -985,32 +1574,31 @@ def main():
         processed = run_mode1_once_from_args(args, mode1_settings)
         if args.once:
             if not processed:
-                print("未检测到可处理的 npz 输入，已退出。")
+                print(cat_line("未检测到可处理的 npz 输入，已退出"))
             return
         if not processed:
             setup_mode1_interactive(mode1_settings)
-        mode1_loop(mode1_settings)
+        result = mode1_loop(mode1_settings)
+        if result == "restart":
+            interactive_main_loop(mode1_settings, mode2_settings)
         return
 
     if args.mode == "2":
         processed = run_mode2_once_from_args(args, mode2_settings)
         if args.once:
             if not processed:
-                print("未检测到可处理的 glb 输入，已退出。")
+                print(cat_line("未检测到可处理的 glb 输入，已退出"))
             return
-        mode2_loop(mode2_settings)
+        result = mode2_loop(mode2_settings)
+        if result == "restart":
+            interactive_main_loop(mode1_settings, mode2_settings)
         return
 
-    selected_mode = choose_mode_interactive(default_mode=1)
-    if selected_mode == 1:
-        setup_mode1_interactive(mode1_settings)
-        mode1_loop(mode1_settings)
-    else:
-        mode2_loop(mode2_settings)
+    interactive_main_loop(mode1_settings, mode2_settings)
 
 
 if __name__ == "__main__":
     try:
         main()
     except KeyboardInterrupt:
-        print("\n用户中断，程序结束。")
+        print("\n辛苦啦主人，下次再来找我转换文件喵～")
